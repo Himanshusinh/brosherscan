@@ -17,61 +17,82 @@ const VIDEO_SRC    = '/videos/brochure-video.mp4'
 const VIDEO_WIDTH  = 1        // AR plane width  (in A-Frame units)
 const VIDEO_HEIGHT = 0.5625  // AR plane height — 16:9 ratio (1 × 9/16)
 
-// MindAR One Euro filter — lower minCF = less shake, higher tolerance = fewer dropouts
-const FILTER_MIN_CF      = 0.00001
-const FILTER_BETA        = 400
-const MISS_TOLERANCE     = 25
-const WARMUP_TOLERANCE   = 18
+// MindAR One Euro filter — lower minCF / beta = less shake (more lag when moving)
+const FILTER_MIN_CF      = 0.000001
+const FILTER_BETA        = 80
+const MISS_TOLERANCE     = 30
+const WARMUP_TOLERANCE   = 22
 
-// Extra matrix smoothing on the AR video overlay (0.08 = very stable, 0.2 = responsive)
-const SMOOTH_LOCK_AMOUNT = 0.1
+// Second-pass stabilizer applied after MindAR updates each frame
+const STABILIZER_POS_FACTOR  = 0.035
+const STABILIZER_ROT_FACTOR  = 0.04
+const STABILIZER_POS_DEADZONE = 0.0004
+const STABILIZER_ROT_DEADZONE = 0.0012
 
-function registerSmoothTracking() {
+/** Patch MindAR target updates with position/quaternion smoothing (matrix lerp causes shake). */
+function registerTrackingStabilizer() {
   const AFRAME = (window as any).AFRAME
-  if (!AFRAME?.registerComponent || AFRAME.components['ar-smooth-lock']) return
+  const comp = AFRAME?.components?.['mindar-image-target']
+  if (!comp?.updateWorldMatrix || comp.__stabilized) return
+  comp.__stabilized = true
 
   const THREE = AFRAME.THREE
-  type SmoothState = {
-    display: InstanceType<typeof THREE.Matrix4>
-    target: InstanceType<typeof THREE.Matrix4>
-    active: boolean
+  type StabilizerState = {
+    pos: InstanceType<typeof THREE.Vector3>
+    quat: InstanceType<typeof THREE.Quaternion>
+    scale: InstanceType<typeof THREE.Vector3>
+    ready: boolean
   }
-  const states = new WeakMap<object, SmoothState>()
+  const states = new WeakMap<object, StabilizerState>()
+  const scratch = {
+    pos: new THREE.Vector3(),
+    quat: new THREE.Quaternion(),
+    scale: new THREE.Vector3(),
+  }
 
-  AFRAME.registerComponent('ar-smooth-lock', {
-    schema: {
-      amount: { type: 'number', default: SMOOTH_LOCK_AMOUNT },
-    },
-    init(this: any) {
-      states.set(this.el, {
-        display: new THREE.Matrix4(),
-        target: new THREE.Matrix4(),
-        active: false,
-      })
-      this.onRenderStart = () => {
-        if (!this.el.object3D.visible) {
-          states.get(this.el)!.active = false
-          return
-        }
-        const st = states.get(this.el)!
-        st.target.copy(this.el.object3D.matrix)
-        if (!st.active) {
-          st.display.copy(st.target)
-          st.active = true
-        } else {
-          const f = this.data.amount
-          const s = st.display.elements
-          const t = st.target.elements
-          for (let i = 0; i < 16; i++) s[i] += (t[i] - s[i]) * f
-        }
-        this.el.object3D.matrix.copy(st.display)
+  const original = comp.updateWorldMatrix
+  comp.updateWorldMatrix = function (this: { el: any }, matrix: number[] | null) {
+    original.call(this, matrix)
+
+    const el = this.el
+    if (!matrix || !el?.object3D?.visible) {
+      if (el) states.delete(el)
+      return
+    }
+
+    el.object3D.matrix.decompose(scratch.pos, scratch.quat, scratch.scale)
+
+    let st = states.get(el)
+    if (!st) {
+      st = {
+        pos: scratch.pos.clone(),
+        quat: scratch.quat.clone(),
+        scale: scratch.scale.clone(),
+        ready: false,
       }
-      this.el.sceneEl.addEventListener('renderstart', this.onRenderStart)
-    },
-    remove(this: any) {
-      this.el.sceneEl.removeEventListener('renderstart', this.onRenderStart)
-    },
-  })
+      states.set(el, st)
+    }
+
+    if (!st.ready) {
+      st.pos.copy(scratch.pos)
+      st.quat.copy(scratch.quat)
+      st.scale.copy(scratch.scale)
+      st.ready = true
+    } else {
+      const posDelta = st.pos.distanceTo(scratch.pos)
+      const rotDelta = st.quat.angleTo(scratch.quat)
+      const posFactor = posDelta < STABILIZER_POS_DEADZONE ? 0 : STABILIZER_POS_FACTOR
+      const rotFactor = rotDelta < STABILIZER_ROT_DEADZONE ? 0 : STABILIZER_ROT_FACTOR
+
+      if (posFactor) {
+        st.pos.lerp(scratch.pos, posFactor)
+        st.scale.lerp(scratch.scale, posFactor)
+      }
+      if (rotFactor) st.quat.slerp(scratch.quat, rotFactor)
+    }
+
+    el.object3D.matrix.compose(st.pos, st.quat, st.scale)
+  }
 }
 
 function removeCameraBackdrop(parent: HTMLElement | null) {
@@ -166,7 +187,7 @@ function loadARLibraries(): Promise<void> {
     fetch(TARGET_MIND).catch(() => {})
 
     if ((window as any).AFRAME?.components?.['mindar-image']) {
-      registerSmoothTracking()
+      registerTrackingStabilizer()
       return
     }
 
@@ -180,7 +201,7 @@ function loadARLibraries(): Promise<void> {
       await waitForReady(() => !!(window as any).AFRAME?.components?.['mindar-image'])
     }
 
-    registerSmoothTracking()
+    registerTrackingStabilizer()
   })().catch((err) => {
     arLibrariesPromise = null
     throw err
@@ -408,10 +429,7 @@ export default function ARViewer() {
         <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
 
         <!-- Target 0 = first image in your .mind file -->
-        <a-entity
-          mindar-image-target="targetIndex: 0"
-          ar-smooth-lock="amount: ${SMOOTH_LOCK_AMOUNT}"
-        >
+        <a-entity mindar-image-target="targetIndex: 0">
           <a-video
             src="#brochure-video"
             position="0 0 0.001"
