@@ -24,11 +24,27 @@ html, body {
   background: transparent;
 }
 
-/* MindAR camera — full viewport cover (JS also sets exact size after MindAR resize) */
-.ar-scene-container > video {
+/* MindAR live camera only — not the hidden brochure video asset */
+.ar-scene-container > video.ar-camera-feed,
+video.ar-camera-feed {
   position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  height: 100dvh !important;
+  min-width: 100% !important;
+  min-height: 100% !important;
   object-fit: cover !important;
+  object-position: center center !important;
   z-index: 0 !important;
+  transform: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  filter: none !important;
+  -webkit-filter: none !important;
 }
 
 .ar-scene-container a-scene {

@@ -27,50 +27,38 @@ function removeCameraBackdrop(parent: HTMLElement | null) {
   parent?.querySelector('.ar-camera-backdrop')?.remove()
 }
 
-/** Cover-fit camera to the full viewport — no letterboxing, no blur. */
+/** Tag MindAR's camera feed so CSS/JS don't affect the brochure video asset. */
+function markCameraFeed(camVideo: HTMLVideoElement) {
+  camVideo.classList.add('ar-camera-feed')
+}
+
+/** Full-screen cover via CSS object-fit — avoids pixel-math gaps on mobile. */
 function applyFullScreenCover(scene: any) {
   const system = scene?.systems?.['mindar-image-system']
   const camVideo = system?.video as HTMLVideoElement | undefined
   if (!camVideo) return
 
   removeCameraBackdrop(camVideo.parentElement)
+  markCameraFeed(camVideo)
 
-  const vw = window.visualViewport?.width ?? window.innerWidth
-  const vh = window.visualViewport?.height ?? window.innerHeight
-  const sw = camVideo.videoWidth
-  const sh = camVideo.videoHeight
-
+  // Let the browser cover-fit natively — no manual width/height math (fixes left black bar).
   camVideo.style.setProperty('position', 'fixed', 'important')
+  camVideo.style.setProperty('top', '0', 'important')
+  camVideo.style.setProperty('left', '0', 'important')
+  camVideo.style.setProperty('right', '0', 'important')
+  camVideo.style.setProperty('bottom', '0', 'important')
+  camVideo.style.setProperty('width', '100%', 'important')
+  camVideo.style.setProperty('height', '100%', 'important')
+  camVideo.style.setProperty('min-width', '100%', 'important')
+  camVideo.style.setProperty('min-height', '100%', 'important')
   camVideo.style.setProperty('object-fit', 'cover', 'important')
+  camVideo.style.setProperty('object-position', 'center center', 'important')
   camVideo.style.setProperty('z-index', '0', 'important')
   camVideo.style.setProperty('transform', 'none', 'important')
-
-  if (!sw || !sh) {
-    camVideo.style.setProperty('inset', '0', 'important')
-    camVideo.style.setProperty('width', '100%', 'important')
-    camVideo.style.setProperty('height', '100%', 'important')
-    camVideo.style.removeProperty('left')
-    camVideo.style.removeProperty('top')
-    return
-  }
-
-  const videoAspect = sw / sh
-  const viewAspect = vw / vh
-  let w: number
-  let h: number
-
-  if (videoAspect > viewAspect) {
-    h = vh
-    w = h * videoAspect
-  } else {
-    w = vw
-    h = w / videoAspect
-  }
-
-  camVideo.style.setProperty('width', `${w}px`, 'important')
-  camVideo.style.setProperty('height', `${h}px`, 'important')
-  camVideo.style.setProperty('left', `${(vw - w) / 2}px`, 'important')
-  camVideo.style.setProperty('top', `${(vh - h) / 2}px`, 'important')
+  camVideo.style.setProperty('margin', '0', 'important')
+  camVideo.style.setProperty('padding', '0', 'important')
+  camVideo.style.setProperty('max-width', 'none', 'important')
+  camVideo.style.setProperty('max-height', 'none', 'important')
 }
 
 const AFRAME_SRC = '/vendor/aframe.min.js'
@@ -154,11 +142,13 @@ function patchCameraConstraints() {
   media.getUserMedia = (constraints) => {
     const next = { ...constraints } as MediaStreamConstraints
     if (next.video && typeof next.video === 'object') {
-      // Never use mandatory zoom — breaks most desktop browsers and many phones
       const { zoom: _z, ...rest } = next.video as MediaTrackConstraints & { zoom?: unknown }
       next.video = {
         ...rest,
+        facingMode: { ideal: 'environment' },
         focusMode: { ideal: 'continuous' },
+        width: { ideal: 1920, min: 1280 },
+        height: { ideal: 1080, min: 720 },
       } as MediaTrackConstraints
     }
     return original(next)
@@ -263,6 +253,7 @@ async function applyWidestCameraZoom(scene: any) {
   const track = (video?.srcObject as MediaStream | undefined)?.getVideoTracks()?.[0]
   if (!track?.applyConstraints) return
 
+  // First, try to set zoom to minimum (widest view)
   try {
     const caps = track.getCapabilities?.() as MediaTrackCapabilities & {
       zoom?: { min?: number; max?: number }
@@ -283,8 +274,17 @@ async function applyWidestCameraZoom(scene: any) {
         await track.applyConstraints({ zoom: minZoom } as MediaTrackConstraints)
       }
     } catch {
-      // display + backdrop zoom handles unsupported devices
+      // zoom not supported — that's fine
     }
+  }
+
+  // Also try to enable continuous autofocus for clarity
+  try {
+    await track.applyConstraints({
+      advanced: [{ focusMode: 'continuous' }],
+    } as unknown as MediaTrackConstraints)
+  } catch {
+    // not supported on all devices
   }
 
   system?._resize?.()
