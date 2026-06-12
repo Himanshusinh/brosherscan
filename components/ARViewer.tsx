@@ -100,6 +100,28 @@ function patchCameraConstraints() {
   ;(media as any).__arPatched = true
 }
 
+function makeSceneTransparent(scene: any) {
+  if (!scene) return
+  if (scene.object3D) scene.object3D.background = null
+  if (scene.renderer) {
+    scene.renderer.setClearColor(0x000000, 0)
+    scene.renderer.domElement.style.background = 'transparent'
+  }
+  const bg = scene.components?.background
+  if (bg?.mesh) bg.mesh.visible = false
+}
+
+function ensureCameraVisible(scene: any) {
+  const system = scene?.systems?.['mindar-image-system']
+  const camVideo = system?.video as HTMLVideoElement | undefined
+  if (!camVideo) return
+  camVideo.style.position = 'absolute'
+  camVideo.style.top = '0'
+  camVideo.style.left = '0'
+  camVideo.style.zIndex = '0'
+  camVideo.play().catch(() => {})
+}
+
 function syncContainerSize(container: HTMLDivElement | null) {
   if (!container) return
   container.style.width = `${window.innerWidth}px`
@@ -150,8 +172,7 @@ export default function ARViewer() {
         id="ar-scene"
         mindar-image="imageTargetSrc: ${TARGET_MIND}; autoStart: true; uiLoading: no; uiError: no; uiScanning: no;"
         color-space="sRGB"
-        background="color: transparent"
-        renderer="alpha: true; premultipliedAlpha: false; colorManagement: true; physicallyCorrectLights: true"
+        renderer="alpha: true; colorManagement: true; physicallyCorrectLights: true"
         vr-mode-ui="enabled: false"
         device-orientation-permission-ui="enabled: false"
       >
@@ -187,26 +208,28 @@ export default function ARViewer() {
 
     scene?.addEventListener('loaded', () => {
       videoRef.current = document.getElementById('brochure-video') as HTMLVideoElement
+      makeSceneTransparent(scene)
+    })
+
+    scene?.addEventListener('renderstart', () => {
+      makeSceneTransparent(scene)
     })
 
     scene?.addEventListener('arReady', async () => {
       setStatus('scanning')
       syncContainerSize(sceneRef.current)
-
-      // Ensure MindAR camera video is visible
-      const system = scene.systems?.['mindar-image-system']
-      const camVideo = system?.video as HTMLVideoElement | undefined
-      if (camVideo) {
-        camVideo.style.zIndex = '0'
-        camVideo.play().catch(() => {})
-      }
-
-      await enhanceCameraQuality(scene)
+      makeSceneTransparent(scene)
+      ensureCameraVisible(scene)
       resizeMindAR()
-      setTimeout(() => {
+
+      // Improve quality after camera is already visible
+      setTimeout(async () => {
+        await enhanceCameraQuality(scene)
         syncContainerSize(sceneRef.current)
+        ensureCameraVisible(scene)
+        makeSceneTransparent(scene)
         resizeMindAR()
-      }, 300)
+      }, 500)
     })
 
     scene?.addEventListener('arError', (e: any) => {
