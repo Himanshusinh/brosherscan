@@ -24,17 +24,8 @@ html, body {
   background: transparent;
 }
 
-/* Full-screen camera — centered cover, fills entire viewport */
+/* Camera sizing is handled in JS (applyCameraDisplayZoom) */
 .ar-scene-container > video {
-  position: fixed !important;
-  top: 50% !important;
-  left: 50% !important;
-  min-width: 100vw !important;
-  min-height: 100dvh !important;
-  width: auto !important;
-  height: auto !important;
-  transform: translate(-50%, -50%) !important;
-  object-fit: cover !important;
   z-index: 0 !important;
 }
 

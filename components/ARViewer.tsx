@@ -23,8 +23,8 @@ const FILTER_BETA        = 800
 const MISS_TOLERANCE     = 12
 const WARMUP_TOLERANCE   = 8
 
-// Camera zoom: 1 = normal. Lower = wider (zoomed out). 0.35 ≈ ultra-wide.
-const CAMERA_ZOOM        = 0.35
+// Display zoom: 0 = widest (see most), 1 = full cover (most zoomed in). Use ~0.1–0.3 to zoom OUT.
+const DISPLAY_ZOOM       = 0.12
 
 // ─────────────────────────────────────────────
 
@@ -132,33 +132,42 @@ function makeSceneTransparent(scene: any) {
   if (bg?.mesh) bg.mesh.visible = false
 }
 
+function applyCameraDisplayZoom(camVideo: HTMLVideoElement) {
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  const sw = camVideo.videoWidth
+  const sh = camVideo.videoHeight
+
+  camVideo.style.setProperty('position', 'fixed', 'important')
+  camVideo.style.setProperty('transform', 'none', 'important')
+  camVideo.style.setProperty('object-fit', 'cover', 'important')
+  camVideo.style.setProperty('z-index', '0', 'important')
+
+  if (!sw || !sh) {
+    camVideo.style.setProperty('inset', '0', 'important')
+    camVideo.style.setProperty('width', '100%', 'important')
+    camVideo.style.setProperty('height', '100%', 'important')
+    return
+  }
+
+  // cover = fills screen (zoomed in) | contain = full stream (zoomed out)
+  const coverScale = Math.max(vw / sw, vh / sh)
+  const containScale = Math.min(vw / sw, vh / sh)
+  const scale = containScale + (coverScale - containScale) * DISPLAY_ZOOM
+
+  const w = sw * scale
+  const h = sh * scale
+  camVideo.style.setProperty('width', `${w}px`, 'important')
+  camVideo.style.setProperty('height', `${h}px`, 'important')
+  camVideo.style.setProperty('left', `${(vw - w) / 2}px`, 'important')
+  camVideo.style.setProperty('top', `${(vh - h) / 2}px`, 'important')
+}
+
 function ensureFullScreenCamera(scene: any) {
   const camVideo = scene?.systems?.['mindar-image-system']?.video as HTMLVideoElement | undefined
   if (!camVideo) return
-
-  // Wider min dimensions = zoomed-out full-screen cover (100 / 0.35 ≈ 286%)
-  const zoomFactor = (100 / CAMERA_ZOOM).toFixed(0)
-
-  camVideo.style.setProperty('position', 'fixed', 'important')
-  camVideo.style.setProperty('top', '50%', 'important')
-  camVideo.style.setProperty('left', '50%', 'important')
-  camVideo.style.setProperty('min-width', `${zoomFactor}vw`, 'important')
-  camVideo.style.setProperty('min-height', `${zoomFactor}dvh`, 'important')
-  camVideo.style.setProperty('width', 'auto', 'important')
-  camVideo.style.setProperty('height', 'auto', 'important')
-  camVideo.style.setProperty('transform', 'translate(-50%, -50%)', 'important')
-  camVideo.style.setProperty('object-fit', 'cover', 'important')
-  camVideo.style.setProperty('z-index', '0', 'important')
+  applyCameraDisplayZoom(camVideo)
   camVideo.play().catch(() => {})
-}
-
-function widenARCamera(scene: any) {
-  if (CAMERA_ZOOM >= 1) return
-  const cam = scene.querySelector('a-camera')?.getObject3D('camera')
-  if (!cam) return
-  if (scene.__baseFov == null) scene.__baseFov = cam.fov
-  cam.fov = Math.min(105, scene.__baseFov / CAMERA_ZOOM)
-  cam.updateProjectionMatrix()
 }
 
 function ensureCameraVisible(scene: any) {
@@ -176,14 +185,7 @@ function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
 function resizeMindAR() {
   const scene = document.getElementById('ar-scene') as any
   scene?.systems?.['mindar-image-system']?._resize?.()
-  if (scene) {
-    if (scene.__baseFov == null) {
-      const cam = scene.querySelector('a-camera')?.getObject3D('camera')
-      if (cam) scene.__baseFov = cam.fov
-    }
-    widenARCamera(scene)
-    ensureFullScreenCamera(scene)
-  }
+  if (scene) ensureFullScreenCamera(scene)
 }
 
 async function focusCameraAtPoint(
@@ -227,6 +229,7 @@ async function focusCameraAtPoint(
 }
 
 async function enhanceCameraQuality(scene: any) {
+  // Optional: try hardware wide-angle if device supports it (never mandatory)
   const system = scene?.systems?.['mindar-image-system']
   const video = system?.video as HTMLVideoElement | undefined
   const track = (video?.srcObject as MediaStream | undefined)?.getVideoTracks()?.[0]
@@ -241,7 +244,7 @@ async function enhanceCameraQuality(scene: any) {
       await track.applyConstraints({ zoom: { ideal: minZoom } } as MediaTrackConstraints)
     }
   } catch {
-    // Visual CSS zoom still applies if hardware zoom unsupported
+    // CSS display zoom handles zoom-out on unsupported devices
   }
   system?._resize?.()
   ensureFullScreenCamera(scene)
@@ -330,9 +333,12 @@ export default function ARViewer() {
       resizeMindAR()
       makeSceneTransparent(scene)
       ensureCameraVisible(scene)
-      resizeMindAR()
 
-      // Improve quality in background — don't block camera startup
+      const camVideo = scene.systems?.['mindar-image-system']?.video as HTMLVideoElement
+      camVideo?.addEventListener('loadedmetadata', () => {
+        applyCameraDisplayZoom(camVideo)
+      }, { once: true })
+
       const idle = window.requestIdleCallback ?? ((cb: () => void) => setTimeout(cb, 2000))
       idle(() => enhanceCameraQuality(scene))
     })
