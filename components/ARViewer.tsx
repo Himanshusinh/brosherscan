@@ -115,23 +115,32 @@ function ensureCameraVisible(scene: any) {
   const system = scene?.systems?.['mindar-image-system']
   const camVideo = system?.video as HTMLVideoElement | undefined
   if (!camVideo) return
-  camVideo.style.position = 'absolute'
-  camVideo.style.top = '0'
-  camVideo.style.left = '0'
-  camVideo.style.zIndex = '0'
+  camVideo.style.setProperty('position', 'absolute', 'important')
+  camVideo.style.setProperty('inset', '0', 'important')
+  camVideo.style.setProperty('width', '100%', 'important')
+  camVideo.style.setProperty('height', '100%', 'important')
+  camVideo.style.setProperty('object-fit', 'cover', 'important')
+  camVideo.style.setProperty('z-index', '0', 'important')
   camVideo.play().catch(() => {})
 }
 
 function syncContainerSize(container: HTMLDivElement | null) {
   if (!container) return
-  container.style.width = `${window.innerWidth}px`
-  container.style.height = `${window.innerHeight}px`
-  resizeMindAR()
+  const vv = window.visualViewport
+  const w = vv?.width ?? window.innerWidth
+  const h = vv?.height ?? window.innerHeight
+  container.style.width = `${w}px`
+  container.style.height = `${h}px`
+  container.style.left = `${vv?.offsetLeft ?? 0}px`
+  container.style.top = `${vv?.offsetTop ?? 0}px`
+  resizeMindAR(container)
 }
 
-function resizeMindAR() {
+function resizeMindAR(container?: HTMLDivElement | null) {
   const scene = document.getElementById('ar-scene') as any
-  scene?.systems?.['mindar-image-system']?._resize?.()
+  const system = scene?.systems?.['mindar-image-system']
+  system?._resize?.()
+  if (scene) ensureCameraVisible(scene)
 }
 
 async function enhanceCameraQuality(scene: any) {
@@ -268,14 +277,14 @@ export default function ARViewer() {
   }, [])
 
   useEffect(() => {
-    const onResize = () => {
-      if (sceneBuilt.current) syncContainerSize(sceneRef.current)
-    }
+    const onResize = () => syncContainerSize(sceneRef.current)
     window.addEventListener('orientationchange', onResize)
     window.visualViewport?.addEventListener('resize', onResize)
+    window.visualViewport?.addEventListener('scroll', onResize)
     return () => {
       window.removeEventListener('orientationchange', onResize)
       window.visualViewport?.removeEventListener('resize', onResize)
+      window.visualViewport?.removeEventListener('scroll', onResize)
     }
   }, [])
 
@@ -303,9 +312,8 @@ export default function ARViewer() {
   }, [buildScene])
 
   return (
-    <div className="fixed inset-0 bg-black overflow-hidden">
+    <div className="fixed inset-0 w-full h-[100dvh] bg-black overflow-hidden">
 
-      {/* MindAR uses this parent to size the camera feed */}
       <div ref={sceneRef} className="ar-scene-container" />
 
       {/* ── Loading overlay ── */}
@@ -337,63 +345,16 @@ export default function ARViewer() {
         </div>
       )}
 
-      {/* ── Top HUD (shown while scanning or detected) ── */}
+      {/* Scanning status only */}
       {(status === 'scanning' || status === 'detected') && (
-        <div className="fixed top-0 left-0 right-0 z-20 flex items-center justify-between px-4 py-3"
-          style={{ background: 'linear-gradient(to bottom, rgba(0,0,0,0.6), transparent)' }}
-        >
-          <span className="text-xs font-bold tracking-widest text-indigo-400 uppercase">
-            AR Live
-          </span>
-          <span className={`text-xs px-3 py-1 rounded-full font-medium ${
+        <div className="fixed top-4 right-4 z-20 pointer-events-none">
+          <span className={`text-xs px-3 py-1.5 rounded-full font-medium backdrop-blur-sm ${
             detected
-              ? 'bg-green-500/20 text-green-400'
-              : 'bg-white/10 text-white/50'
+              ? 'bg-green-500/30 text-green-300'
+              : 'bg-black/40 text-white/80'
           }`}>
             {detected ? '● Brochure detected' : '● Scanning…'}
           </span>
-        </div>
-      )}
-
-      {/* ── Scan frame + hint (only while scanning) ── */}
-      {status === 'scanning' && (
-        <>
-          {/* Corner frame */}
-          <div className="fixed inset-0 z-10 pointer-events-none flex items-center justify-center">
-            <div
-              className="scan-corner relative"
-              style={{ width: 'min(75vw, 300px)', aspectRatio: '1.414' }}
-            >
-              {/* TL */}
-              <span className="absolute top-0 left-0 w-7 h-7 border-t-2 border-l-2 border-indigo-400 rounded-tl" />
-              {/* TR */}
-              <span className="absolute top-0 right-0 w-7 h-7 border-t-2 border-r-2 border-indigo-400 rounded-tr" />
-              {/* BL */}
-              <span className="absolute bottom-0 left-0 w-7 h-7 border-b-2 border-l-2 border-indigo-400 rounded-bl" />
-              {/* BR */}
-              <span className="absolute bottom-0 right-0 w-7 h-7 border-b-2 border-r-2 border-indigo-400 rounded-br" />
-            </div>
-          </div>
-
-          {/* Bottom hint */}
-          <div className="fixed bottom-10 left-0 right-0 z-20 flex justify-center">
-            <div className="scan-corner px-5 py-2.5 rounded-2xl text-white/80 text-sm text-center"
-              style={{ background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(8px)', border: '1px solid rgba(255,255,255,0.1)' }}
-            >
-              🔍 Point camera at your brochure
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* ── Detected flash badge ── */}
-      {status === 'detected' && (
-        <div className="fixed bottom-10 left-0 right-0 z-20 flex justify-center fade-in">
-          <div className="px-5 py-2.5 rounded-2xl text-white text-sm font-semibold"
-            style={{ background: 'rgba(99,102,241,0.75)', backdropFilter: 'blur(8px)' }}
-          >
-            ▶ Playing video
-          </div>
         </div>
       )}
 
