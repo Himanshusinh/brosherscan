@@ -51,7 +51,7 @@ export default function ARViewer() {
         id="ar-scene"
         mindar-image="imageTargetSrc: ${TARGET_MIND}; autoStart: true; uiLoading: no; uiError: no; uiScanning: no;"
         color-space="sRGB"
-        renderer="colorManagement: true; physicallyCorrectLights: true"
+        renderer="alpha: true; colorManagement: true; physicallyCorrectLights: true"
         vr-mode-ui="enabled: false"
         device-orientation-permission-ui="enabled: false"
       >
@@ -88,6 +88,12 @@ export default function ARViewer() {
     scene?.addEventListener('loaded', () => {
       videoRef.current = document.getElementById('brochure-video') as HTMLVideoElement
       setStatus('scanning')
+      // MindAR sizes camera from container — force full viewport
+      requestAnimationFrame(() => window.dispatchEvent(new Event('resize')))
+    })
+
+    scene?.addEventListener('arReady', () => {
+      window.dispatchEvent(new Event('resize'))
     })
 
     scene?.addEventListener('arError', (e: any) => {
@@ -118,6 +124,16 @@ export default function ARViewer() {
       setStatus('scanning')
       videoRef.current?.pause()
     })
+  }, [])
+
+  useEffect(() => {
+    const onResize = () => window.dispatchEvent(new Event('resize'))
+    window.addEventListener('orientationchange', onResize)
+    window.visualViewport?.addEventListener('resize', onResize)
+    return () => {
+      window.removeEventListener('orientationchange', onResize)
+      window.visualViewport?.removeEventListener('resize', onResize)
+    }
   }, [])
 
   useEffect(() => {
@@ -167,11 +183,21 @@ export default function ARViewer() {
     }
   }, [buildScene])
 
-  return (
-    <div className="fixed inset-0 bg-black">
+  useEffect(() => {
+    const onResize = () => window.dispatchEvent(new Event('resize'))
+    window.addEventListener('orientationchange', onResize)
+    window.visualViewport?.addEventListener('resize', onResize)
+    return () => {
+      window.removeEventListener('orientationchange', onResize)
+      window.visualViewport?.removeEventListener('resize', onResize)
+    }
+  }, [])
 
-      {/* ── A-Frame scene container ── */}
-      <div ref={sceneRef} className="fixed inset-0 z-0" />
+  return (
+    <div className="fixed inset-0 w-screen h-[100dvh] min-h-[100dvh] bg-black overflow-hidden">
+
+      {/* MindAR parent container — must fill screen for camera sizing */}
+      <div ref={sceneRef} className="ar-scene-container" />
 
       {/* ── Loading overlay ── */}
       {status === 'loading' && (

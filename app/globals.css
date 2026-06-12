@@ -8,18 +8,46 @@ html, body {
   padding: 0;
   width: 100%;
   height: 100%;
+  min-height: 100dvh;
+  min-height: -webkit-fill-available;
   overflow: hidden;
   background: #000;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  touch-action: none;
 }
 
-/* ── A-Frame canvas fills screen ── */
-a-scene {
-  position: fixed !important;
+/* MindAR uses a-scene's parent as the camera container */
+.ar-scene-container {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  min-height: -webkit-fill-available;
+  overflow: hidden;
+  background: #000;
+}
+
+/* ── A-Frame scene + canvas fill container ── */
+.ar-scene-container a-scene {
+  position: absolute !important;
   top: 0 !important;
   left: 0 !important;
   width: 100% !important;
   height: 100% !important;
+}
+
+.ar-scene-container a-scene canvas {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* MindAR camera video feed */
+.ar-scene-container video {
+  object-fit: cover;
 }
 
 /* ── Hide MindAR default UI ── */
