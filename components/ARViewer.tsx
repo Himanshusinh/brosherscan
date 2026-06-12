@@ -16,6 +16,7 @@ const TARGET_MIND  = '/targets/target.mind'   // compiled MindAR image target
 const VIDEO_SRC    = '/videos/brochure-video.mp4'
 const VIDEO_WIDTH  = 1        // AR plane width  (in A-Frame units)
 const VIDEO_HEIGHT = 0.5625  // AR plane height — 16:9 ratio (1 × 9/16)
+const CAMERA_ZOOM  = 0.6     // 0.6x = wider view (ultra-wide). 1 = normal
 
 // ─────────────────────────────────────────────
 
@@ -93,7 +94,8 @@ function patchCameraConstraints() {
         ...next.video,
         width: { ideal: 1920 },
         height: { ideal: 1080 },
-      }
+        zoom: { ideal: CAMERA_ZOOM },
+      } as MediaTrackConstraints
     }
     return original(next)
   }
@@ -115,10 +117,16 @@ function ensureCameraVisible(scene: any) {
   const system = scene?.systems?.['mindar-image-system']
   const camVideo = system?.video as HTMLVideoElement | undefined
   if (!camVideo) return
+
+  // 0.6x = wider field of view — expand video beyond viewport, crop edges
+  const size = `${(100 / CAMERA_ZOOM).toFixed(2)}%`
+  const offset = `${-((100 / CAMERA_ZOOM - 100) / 2).toFixed(2)}%`
+
   camVideo.style.setProperty('position', 'absolute', 'important')
-  camVideo.style.setProperty('inset', '0', 'important')
-  camVideo.style.setProperty('width', '100%', 'important')
-  camVideo.style.setProperty('height', '100%', 'important')
+  camVideo.style.setProperty('width', size, 'important')
+  camVideo.style.setProperty('height', size, 'important')
+  camVideo.style.setProperty('left', offset, 'important')
+  camVideo.style.setProperty('top', offset, 'important')
   camVideo.style.setProperty('object-fit', 'cover', 'important')
   camVideo.style.setProperty('z-index', '0', 'important')
   camVideo.play().catch(() => {})
@@ -154,7 +162,8 @@ async function enhanceCameraQuality(scene: any) {
       facingMode: { ideal: 'environment' },
       width: { ideal: 1920 },
       height: { ideal: 1080 },
-    })
+      zoom: { ideal: CAMERA_ZOOM },
+    } as MediaTrackConstraints)
   } catch {
     // Keep default camera settings if device rejects constraints
   }
