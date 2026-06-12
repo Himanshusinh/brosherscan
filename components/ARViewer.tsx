@@ -19,18 +19,65 @@ const VIDEO_HEIGHT = 0.5625  // AR plane height — 16:9 ratio (1 × 9/16)
 
 // ─────────────────────────────────────────────
 
+const AFRAME_SRC = '/vendor/aframe.min.js'
+const MINDAR_SRC = '/vendor/mindar-image-aframe.prod.js'
+
+function waitForReady(check: () => boolean, timeoutMs = 15000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (check()) return resolve()
+    const started = Date.now()
+    const timer = setInterval(() => {
+      if (check()) {
+        clearInterval(timer)
+        resolve()
+      } else if (Date.now() - started > timeoutMs) {
+        clearInterval(timer)
+        reject(new Error('Timed out waiting for AR library'))
+      }
+    }, 50)
+  })
+}
+
 function loadScript(src: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    if (document.querySelector(`script[src="${src}"]`)) {
+    const existing = document.querySelector(`script[src="${src}"]`) as HTMLScriptElement | null
+    if (existing?.dataset.loaded === 'true') {
       resolve()
+      return
+    }
+    if (existing) {
+      existing.addEventListener('load', () => resolve(), { once: true })
+      existing.addEventListener('error', () => reject(new Error(`Failed to load ${src}`)), { once: true })
       return
     }
     const script = document.createElement('script')
     script.src = src
-    script.onload = () => resolve()
+    script.onload = () => {
+      script.dataset.loaded = 'true'
+      resolve()
+    }
     script.onerror = () => reject(new Error(`Failed to load ${src}`))
     document.head.appendChild(script)
   })
+}
+
+let arLibrariesPromise: Promise<void> | null = null
+
+function loadARLibraries(): Promise<void> {
+  if (arLibrariesPromise) return arLibrariesPromise
+
+  arLibrariesPromise = (async () => {
+    patchCameraConstraints()
+    await loadScript(AFRAME_SRC)
+    await waitForReady(() => !!(window as any).AFRAME)
+    await loadScript(MINDAR_SRC)
+    await waitForReady(() => !!(window as any).AFRAME?.components?.['mindar-image'])
+  })().catch((err) => {
+    arLibrariesPromise = null
+    throw err
+  })
+
+  return arLibrariesPromise
 }
 
 function patchCameraConstraints() {
@@ -93,13 +140,15 @@ type Status = 'loading' | 'ready' | 'scanning' | 'detected' | 'error'
 export default function ARViewer() {
   const sceneRef    = useRef<HTMLDivElement>(null)
   const videoRef    = useRef<HTMLVideoElement | null>(null)
+  const sceneBuilt  = useRef(false)
   const [status, setStatus]   = useState<Status>('loading')
   const [errorMsg, setErrorMsg] = useState('')
   const [detected, setDetected] = useState(false)
 
   // ── inject the A-Frame / MindAR scene into the DOM ──────────────
   const buildScene = useCallback(() => {
-    if (!sceneRef.current) return
+    if (!sceneRef.current || sceneBuilt.current) return
+    sceneBuilt.current = true
 
     sceneRef.current.innerHTML = `
       <a-scene
@@ -158,7 +207,12 @@ export default function ARViewer() {
     scene?.addEventListener('arError', (e: any) => {
       console.error('AR Error:', e)
       setStatus('error')
-      setErrorMsg('Camera access denied or AR not supported on this browser.')
+      const detail = e?.detail?.error
+      if (detail === 'VIDEO_FAIL') {
+        setErrorMsg('Camera access denied. Allow camera permission and reload the page.')
+      } else {
+        setErrorMsg('AR failed to start. Use Chrome/Safari on a phone with HTTPS.')
+      }
     })
 
     // ── Brochure detected ──
@@ -198,41 +252,16 @@ export default function ARViewer() {
 
   useEffect(() => {
     let cancelled = false
-    let interval: ReturnType<typeof setInterval> | undefined
 
     async function init() {
       try {
-        patchCameraConstraints()
-        await loadScript('/vendor/aframe.min.js')
-        await loadScript('/vendor/mindar-image-aframe.prod.js')
-
+        await loadARLibraries()
         if (cancelled) return
-
-        const AFRAME = (window as any).AFRAME
-        if (AFRAME?.components?.['mindar-image']) {
-          buildScene()
-          return
-        }
-
-        // Fallback: poll briefly in case registration is deferred
-        let attempts = 0
-        interval = setInterval(() => {
-          if (cancelled) return
-          attempts++
-          const af = (window as any).AFRAME
-          if (af?.components?.['mindar-image']) {
-            clearInterval(interval)
-            buildScene()
-          } else if (attempts > 30) {
-            clearInterval(interval)
-            setStatus('error')
-            setErrorMsg('AR library failed to load. Please refresh.')
-          }
-        }, 100)
+        buildScene()
       } catch {
         if (!cancelled) {
           setStatus('error')
-          setErrorMsg('AR library failed to load. Please refresh.')
+          setErrorMsg('AR library failed to load. Please refresh the page.')
         }
       }
     }
@@ -240,7 +269,7 @@ export default function ARViewer() {
     init()
     return () => {
       cancelled = true
-      if (interval) clearInterval(interval)
+      sceneBuilt.current = false
     }
   }, [buildScene])
 
