@@ -109,12 +109,11 @@ function patchCameraConstraints() {
   media.getUserMedia = (constraints) => {
     const next = { ...constraints } as MediaStreamConstraints
     if (next.video && typeof next.video === 'object') {
+      // Never use mandatory zoom — breaks most desktop browsers and many phones
+      const { zoom: _z, ...rest } = next.video as MediaTrackConstraints & { zoom?: unknown }
       next.video = {
-        ...next.video,
-        width: { ideal: 640 },
-        height: { ideal: 480 },
+        ...rest,
         focusMode: { ideal: 'continuous' },
-        zoom: { ideal: CAMERA_ZOOM, min: CAMERA_ZOOM },
       } as MediaTrackConstraints
     }
     return original(next)
@@ -237,16 +236,12 @@ async function enhanceCameraQuality(scene: any) {
     const caps = track.getCapabilities?.() as MediaTrackCapabilities & {
       zoom?: { min?: number; max?: number }
     }
-    const zoomCaps = caps?.zoom
-    // Use the widest zoom the device supports (lowest zoom value)
-    const targetZoom = zoomCaps?.min ?? CAMERA_ZOOM
-
-    await track.applyConstraints({
-      facingMode: { ideal: 'environment' },
-      zoom: { ideal: targetZoom, min: targetZoom },
-    } as MediaTrackConstraints)
+    const minZoom = caps?.zoom?.min
+    if (minZoom != null && minZoom < 1) {
+      await track.applyConstraints({ zoom: { ideal: minZoom } } as MediaTrackConstraints)
+    }
   } catch {
-    // Keep default camera settings if device rejects constraints
+    // Visual CSS zoom still applies if hardware zoom unsupported
   }
   system?._resize?.()
   ensureFullScreenCamera(scene)
@@ -288,7 +283,7 @@ export default function ARViewer() {
         id="ar-scene"
         mindar-image="imageTargetSrc: ${TARGET_MIND}; autoStart: true; uiLoading: no; uiError: no; uiScanning: no; filterMinCF: ${FILTER_MIN_CF}; filterBeta: ${FILTER_BETA}; missTolerance: ${MISS_TOLERANCE}; warmupTolerance: ${WARMUP_TOLERANCE};"
         color-space="sRGB"
-        renderer="alpha: true; antialias: false; precision: mediump"
+        renderer="alpha: true; antialias: false"
         vr-mode-ui="enabled: false"
         device-orientation-permission-ui="enabled: false"
       >
