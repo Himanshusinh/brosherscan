@@ -16,7 +16,6 @@ const TARGET_MIND  = '/targets/target.mind'   // compiled MindAR image target
 const VIDEO_SRC    = '/videos/brochure-video.mp4'
 const VIDEO_WIDTH  = 1        // AR plane width  (in A-Frame units)
 const VIDEO_HEIGHT = 0.5625  // AR plane height — 16:9 ratio (1 × 9/16)
-const CAMERA_ZOOM  = 0.6     // 0.6x = wider view (ultra-wide). 1 = normal
 
 // ─────────────────────────────────────────────
 
@@ -69,10 +68,21 @@ function loadARLibraries(): Promise<void> {
 
   arLibrariesPromise = (async () => {
     patchCameraConstraints()
-    await loadScript(AFRAME_SRC)
-    await waitForReady(() => !!(window as any).AFRAME)
-    await loadScript(MINDAR_SRC)
-    await waitForReady(() => !!(window as any).AFRAME?.components?.['mindar-image'])
+
+    // Warm .mind cache while scripts finish loading
+    fetch(TARGET_MIND).catch(() => {})
+
+    if ((window as any).AFRAME?.components?.['mindar-image']) return
+
+    // Layout preloads scripts — wait briefly, then fallback to dynamic load
+    try {
+      await waitForReady(() => !!(window as any).AFRAME?.components?.['mindar-image'], 8000)
+    } catch {
+      await loadScript(AFRAME_SRC)
+      await waitForReady(() => !!(window as any).AFRAME)
+      await loadScript(MINDAR_SRC)
+      await waitForReady(() => !!(window as any).AFRAME?.components?.['mindar-image'])
+    }
   })().catch((err) => {
     arLibrariesPromise = null
     throw err
@@ -94,8 +104,7 @@ function patchCameraConstraints() {
         ...next.video,
         width: { ideal: 1920 },
         height: { ideal: 1080 },
-        zoom: { ideal: CAMERA_ZOOM },
-      } as MediaTrackConstraints
+      }
     }
     return original(next)
   }
@@ -117,16 +126,10 @@ function ensureCameraVisible(scene: any) {
   const system = scene?.systems?.['mindar-image-system']
   const camVideo = system?.video as HTMLVideoElement | undefined
   if (!camVideo) return
-
-  // 0.6x = wider field of view — expand video beyond viewport, crop edges
-  const size = `${(100 / CAMERA_ZOOM).toFixed(2)}%`
-  const offset = `${-((100 / CAMERA_ZOOM - 100) / 2).toFixed(2)}%`
-
   camVideo.style.setProperty('position', 'absolute', 'important')
-  camVideo.style.setProperty('width', size, 'important')
-  camVideo.style.setProperty('height', size, 'important')
-  camVideo.style.setProperty('left', offset, 'important')
-  camVideo.style.setProperty('top', offset, 'important')
+  camVideo.style.setProperty('inset', '0', 'important')
+  camVideo.style.setProperty('width', '100%', 'important')
+  camVideo.style.setProperty('height', '100%', 'important')
   camVideo.style.setProperty('object-fit', 'cover', 'important')
   camVideo.style.setProperty('z-index', '0', 'important')
   camVideo.play().catch(() => {})
@@ -162,8 +165,7 @@ async function enhanceCameraQuality(scene: any) {
       facingMode: { ideal: 'environment' },
       width: { ideal: 1920 },
       height: { ideal: 1080 },
-      zoom: { ideal: CAMERA_ZOOM },
-    } as MediaTrackConstraints)
+    })
   } catch {
     // Keep default camera settings if device rejects constraints
   }
@@ -190,15 +192,14 @@ export default function ARViewer() {
         id="ar-scene"
         mindar-image="imageTargetSrc: ${TARGET_MIND}; autoStart: true; uiLoading: no; uiError: no; uiScanning: no;"
         color-space="sRGB"
-        renderer="alpha: true; colorManagement: true; physicallyCorrectLights: true"
+        renderer="alpha: true; antialias: false; precision: mediump"
         vr-mode-ui="enabled: false"
         device-orientation-permission-ui="enabled: false"
       >
-        <a-assets timeout="10000">
+        <a-assets timeout="5000">
           <video
             id="brochure-video"
-            src="${VIDEO_SRC}"
-            preload="auto"
+            preload="none"
             loop="true"
             playsinline
             webkit-playsinline
@@ -233,21 +234,16 @@ export default function ARViewer() {
       makeSceneTransparent(scene)
     })
 
-    scene?.addEventListener('arReady', async () => {
+    scene?.addEventListener('arReady', () => {
       setStatus('scanning')
       syncContainerSize(sceneRef.current)
       makeSceneTransparent(scene)
       ensureCameraVisible(scene)
       resizeMindAR()
 
-      // Improve quality after camera is already visible
-      setTimeout(async () => {
-        await enhanceCameraQuality(scene)
-        syncContainerSize(sceneRef.current)
-        ensureCameraVisible(scene)
-        makeSceneTransparent(scene)
-        resizeMindAR()
-      }, 500)
+      // Improve quality in background — don't block camera startup
+      const idle = window.requestIdleCallback ?? ((cb: () => void) => setTimeout(cb, 2000))
+      idle(() => enhanceCameraQuality(scene))
     })
 
     scene?.addEventListener('arError', (e: any) => {
@@ -269,9 +265,9 @@ export default function ARViewer() {
       const vid = videoRef.current
       if (!vid) return
 
+      if (!vid.src) vid.src = VIDEO_SRC
       vid.muted = false
       vid.play().catch(() => {
-        // Auto-play blocked — retry muted (browser policy)
         vid.muted = true
         vid.play()
       })
