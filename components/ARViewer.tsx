@@ -23,10 +23,55 @@ const FILTER_BETA        = 800
 const MISS_TOLERANCE     = 12
 const WARMUP_TOLERANCE   = 8
 
-// 1 = normal full-screen cover. Lower = wider view (gaps filled by blurred camera backdrop).
-const CAMERA_ZOOM_OUT    = 0.78
+function removeCameraBackdrop(parent: HTMLElement | null) {
+  parent?.querySelector('.ar-camera-backdrop')?.remove()
+}
 
-// ─────────────────────────────────────────────
+/** Cover-fit camera to the full viewport — no letterboxing, no blur. */
+function applyFullScreenCover(scene: any) {
+  const system = scene?.systems?.['mindar-image-system']
+  const camVideo = system?.video as HTMLVideoElement | undefined
+  if (!camVideo) return
+
+  removeCameraBackdrop(camVideo.parentElement)
+
+  const vw = window.visualViewport?.width ?? window.innerWidth
+  const vh = window.visualViewport?.height ?? window.innerHeight
+  const sw = camVideo.videoWidth
+  const sh = camVideo.videoHeight
+
+  camVideo.style.setProperty('position', 'fixed', 'important')
+  camVideo.style.setProperty('object-fit', 'cover', 'important')
+  camVideo.style.setProperty('z-index', '0', 'important')
+  camVideo.style.setProperty('transform', 'none', 'important')
+
+  if (!sw || !sh) {
+    camVideo.style.setProperty('inset', '0', 'important')
+    camVideo.style.setProperty('width', '100%', 'important')
+    camVideo.style.setProperty('height', '100%', 'important')
+    camVideo.style.removeProperty('left')
+    camVideo.style.removeProperty('top')
+    return
+  }
+
+  const videoAspect = sw / sh
+  const viewAspect = vw / vh
+  let w: number
+  let h: number
+
+  if (videoAspect > viewAspect) {
+    h = vh
+    w = h * videoAspect
+  } else {
+    w = vw
+    h = w / videoAspect
+  }
+
+  camVideo.style.setProperty('width', `${w}px`, 'important')
+  camVideo.style.setProperty('height', `${h}px`, 'important')
+  camVideo.style.setProperty('left', `${(vw - w) / 2}px`, 'important')
+  camVideo.style.setProperty('top', `${(vh - h) / 2}px`, 'important')
+}
 
 const AFRAME_SRC = '/vendor/aframe.min.js'
 const MINDAR_SRC = '/vendor/mindar-image-aframe.prod.js'
@@ -132,80 +177,30 @@ function makeSceneTransparent(scene: any) {
   if (bg?.mesh) bg.mesh.visible = false
 }
 
-function ensureCameraBackdrop(camVideo: HTMLVideoElement) {
-  const parent = camVideo.parentElement
-  if (!parent) return null
 
-  let backdrop = parent.querySelector('.ar-camera-backdrop') as HTMLVideoElement | null
-  if (!backdrop) {
-    backdrop = document.createElement('video')
-    backdrop.className = 'ar-camera-backdrop'
-    backdrop.autoplay = true
-    backdrop.muted = true
-    backdrop.playsInline = true
-    parent.insertBefore(backdrop, camVideo)
-  }
-
-  if (camVideo.srcObject && backdrop.srcObject !== camVideo.srcObject) {
-    backdrop.srcObject = camVideo.srcObject
-    backdrop.play().catch(() => {})
-  }
-
-  return backdrop
-}
-
-function applyCameraDisplayZoom(camVideo: HTMLVideoElement) {
-  const vw = window.innerWidth
-  const vh = window.innerHeight
-  const sw = camVideo.videoWidth
-  const sh = camVideo.videoHeight
-
-  camVideo.style.setProperty('position', 'fixed', 'important')
-  camVideo.style.setProperty('transform', 'none', 'important')
-  camVideo.style.setProperty('object-fit', 'cover', 'important')
-  camVideo.style.setProperty('z-index', '1', 'important')
-
-  const backdrop = ensureCameraBackdrop(camVideo)
-
-  if (!sw || !sh) {
-    camVideo.style.setProperty('inset', '0', 'important')
-    camVideo.style.setProperty('width', '100%', 'important')
-    camVideo.style.setProperty('height', '100%', 'important')
-    backdrop?.style.setProperty('inset', '0', 'important')
-    backdrop?.style.setProperty('width', '100%', 'important')
-    backdrop?.style.setProperty('height', '100%', 'important')
-    return
-  }
-
-  // Cover fills the screen; scale down slightly for a wider view — backdrop hides edge gaps.
-  const coverScale = Math.max(vw / sw, vh / sh)
-  const scale = coverScale * CAMERA_ZOOM_OUT
-  const w = sw * scale
-  const h = sh * scale
-
-  camVideo.style.setProperty('width', `${w}px`, 'important')
-  camVideo.style.setProperty('height', `${h}px`, 'important')
-  camVideo.style.setProperty('left', `${(vw - w) / 2}px`, 'important')
-  camVideo.style.setProperty('top', `${(vh - h) / 2}px`, 'important')
-
-  if (backdrop) {
-    const bgScale = coverScale * 1.06
-    backdrop.style.setProperty('width', `${sw * bgScale}px`, 'important')
-    backdrop.style.setProperty('height', `${sh * bgScale}px`, 'important')
-    backdrop.style.setProperty('left', `${(vw - sw * bgScale) / 2}px`, 'important')
-    backdrop.style.setProperty('top', `${(vh - sh * bgScale) / 2}px`, 'important')
-  }
-}
+// ─────────────────────────────────────────────
 
 function ensureFullScreenCamera(scene: any) {
   const camVideo = scene?.systems?.['mindar-image-system']?.video as HTMLVideoElement | undefined
   if (!camVideo) return
-  applyCameraDisplayZoom(camVideo)
+  applyFullScreenCover(scene)
   camVideo.play().catch(() => {})
 }
 
 function ensureCameraVisible(scene: any) {
   ensureFullScreenCamera(scene)
+}
+
+function patchMindARResize(scene: any) {
+  const system = scene?.systems?.['mindar-image-system']
+  if (!system || system.__fullScreenPatched) return
+
+  const original = system._resize.bind(system)
+  system._resize = () => {
+    original()
+    applyFullScreenCover(scene)
+  }
+  system.__fullScreenPatched = true
 }
 
 function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
@@ -293,7 +288,7 @@ async function applyWidestCameraZoom(scene: any) {
   }
 
   system?._resize?.()
-  if (video) applyCameraDisplayZoom(video)
+  applyFullScreenCover(scene)
 }
 
 type Status = 'loading' | 'ready' | 'scanning' | 'detected' | 'error'
@@ -376,13 +371,14 @@ export default function ARViewer() {
 
     scene?.addEventListener('arReady', () => {
       setStatus('scanning')
+      patchMindARResize(scene)
       resizeMindAR()
       makeSceneTransparent(scene)
       ensureCameraVisible(scene)
 
       const camVideo = scene.systems?.['mindar-image-system']?.video as HTMLVideoElement
       const onCamReady = () => {
-        applyCameraDisplayZoom(camVideo)
+        applyFullScreenCover(scene)
         applyWidestCameraZoom(scene)
       }
       camVideo?.addEventListener('loadedmetadata', onCamReady, { once: true })
