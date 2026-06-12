@@ -129,20 +129,29 @@ export default function ARViewer() {
         await loadScript('/vendor/aframe.min.js')
         await loadScript('/vendor/mindar-image-aframe.prod.js')
 
+        if (cancelled) return
+
+        const AFRAME = (window as any).AFRAME
+        if (AFRAME?.components?.['mindar-image']) {
+          buildScene()
+          return
+        }
+
+        // Fallback: poll briefly in case registration is deferred
         let attempts = 0
         interval = setInterval(() => {
           if (cancelled) return
           attempts++
-          const AFRAME = (window as any).AFRAME
-          if (AFRAME?.components?.['mindar-image-system']) {
+          const af = (window as any).AFRAME
+          if (af?.components?.['mindar-image']) {
             clearInterval(interval)
             buildScene()
-          } else if (attempts > 60) {
+          } else if (attempts > 30) {
             clearInterval(interval)
             setStatus('error')
             setErrorMsg('AR library failed to load. Please refresh.')
           }
-        }, 200)
+        }, 100)
       } catch {
         if (!cancelled) {
           setStatus('error')
