@@ -17,11 +17,62 @@ const VIDEO_SRC    = '/videos/brochure-video.mp4'
 const VIDEO_WIDTH  = 1        // AR plane width  (in A-Frame units)
 const VIDEO_HEIGHT = 0.5625  // AR plane height — 16:9 ratio (1 × 9/16)
 
-// MindAR smoothing — lower minCF = less jitter, higher tolerance = more stable lock
-const FILTER_MIN_CF      = 0.0001
-const FILTER_BETA        = 800
-const MISS_TOLERANCE     = 12
-const WARMUP_TOLERANCE   = 8
+// MindAR One Euro filter — lower minCF = less shake, higher tolerance = fewer dropouts
+const FILTER_MIN_CF      = 0.00001
+const FILTER_BETA        = 400
+const MISS_TOLERANCE     = 25
+const WARMUP_TOLERANCE   = 18
+
+// Extra matrix smoothing on the AR video overlay (0.08 = very stable, 0.2 = responsive)
+const SMOOTH_LOCK_AMOUNT = 0.1
+
+function registerSmoothTracking() {
+  const AFRAME = (window as any).AFRAME
+  if (!AFRAME?.registerComponent || AFRAME.components['ar-smooth-lock']) return
+
+  const THREE = AFRAME.THREE
+  type SmoothState = {
+    display: InstanceType<typeof THREE.Matrix4>
+    target: InstanceType<typeof THREE.Matrix4>
+    active: boolean
+  }
+  const states = new WeakMap<object, SmoothState>()
+
+  AFRAME.registerComponent('ar-smooth-lock', {
+    schema: {
+      amount: { type: 'number', default: SMOOTH_LOCK_AMOUNT },
+    },
+    init(this: any) {
+      states.set(this.el, {
+        display: new THREE.Matrix4(),
+        target: new THREE.Matrix4(),
+        active: false,
+      })
+      this.onRenderStart = () => {
+        if (!this.el.object3D.visible) {
+          states.get(this.el)!.active = false
+          return
+        }
+        const st = states.get(this.el)!
+        st.target.copy(this.el.object3D.matrix)
+        if (!st.active) {
+          st.display.copy(st.target)
+          st.active = true
+        } else {
+          const f = this.data.amount
+          const s = st.display.elements
+          const t = st.target.elements
+          for (let i = 0; i < 16; i++) s[i] += (t[i] - s[i]) * f
+        }
+        this.el.object3D.matrix.copy(st.display)
+      }
+      this.el.sceneEl.addEventListener('renderstart', this.onRenderStart)
+    },
+    remove(this: any) {
+      this.el.sceneEl.removeEventListener('renderstart', this.onRenderStart)
+    },
+  })
+}
 
 function removeCameraBackdrop(parent: HTMLElement | null) {
   parent?.querySelector('.ar-camera-backdrop')?.remove()
@@ -114,7 +165,10 @@ function loadARLibraries(): Promise<void> {
     // Warm .mind cache while scripts finish loading
     fetch(TARGET_MIND).catch(() => {})
 
-    if ((window as any).AFRAME?.components?.['mindar-image']) return
+    if ((window as any).AFRAME?.components?.['mindar-image']) {
+      registerSmoothTracking()
+      return
+    }
 
     // Layout preloads scripts — wait briefly, then fallback to dynamic load
     try {
@@ -125,6 +179,8 @@ function loadARLibraries(): Promise<void> {
       await loadScript(MINDAR_SRC)
       await waitForReady(() => !!(window as any).AFRAME?.components?.['mindar-image'])
     }
+
+    registerSmoothTracking()
   })().catch((err) => {
     arLibrariesPromise = null
     throw err
@@ -278,13 +334,19 @@ async function applyWidestCameraZoom(scene: any) {
     }
   }
 
-  // Also try to enable continuous autofocus for clarity
+  // Lock focus once — continuous AF causes hunting that shakes tracking
   try {
     await track.applyConstraints({
-      advanced: [{ focusMode: 'continuous' }],
+      advanced: [{ focusMode: 'single-shot' }],
     } as unknown as MediaTrackConstraints)
   } catch {
-    // not supported on all devices
+    try {
+      await track.applyConstraints({
+        focusMode: { ideal: 'continuous' },
+      } as MediaTrackConstraints)
+    } catch {
+      // not supported on all devices
+    }
   }
 
   system?._resize?.()
@@ -346,13 +408,16 @@ export default function ARViewer() {
         <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
 
         <!-- Target 0 = first image in your .mind file -->
-        <a-entity mindar-image-target="targetIndex: 0">
+        <a-entity
+          mindar-image-target="targetIndex: 0"
+          ar-smooth-lock="amount: ${SMOOTH_LOCK_AMOUNT}"
+        >
           <a-video
             src="#brochure-video"
             position="0 0 0.001"
             width="${VIDEO_WIDTH}"
             height="${VIDEO_HEIGHT}"
-            rotation="0 0 0"
+            material="shader: flat; side: double"
           ></a-video>
         </a-entity>
       </a-scene>
@@ -396,8 +461,14 @@ export default function ARViewer() {
       }
     })
 
+    let targetLostTimer: ReturnType<typeof setTimeout> | null = null
+
     // ── Brochure detected ──
     scene?.addEventListener('targetFound', () => {
+      if (targetLostTimer) {
+        clearTimeout(targetLostTimer)
+        targetLostTimer = null
+      }
       setDetected(true)
       setStatus('detected')
 
@@ -412,22 +483,22 @@ export default function ARViewer() {
       })
     })
 
-    // ── Brochure lost ──
+    // ── Brochure lost (debounced so brief tracking drops don't flicker) ──
     scene?.addEventListener('targetLost', () => {
-      setDetected(false)
-      setStatus('scanning')
-      videoRef.current?.pause()
+      if (targetLostTimer) clearTimeout(targetLostTimer)
+      targetLostTimer = setTimeout(() => {
+        setDetected(false)
+        setStatus('scanning')
+        videoRef.current?.pause()
+        targetLostTimer = null
+      }, 400)
     })
   }, [])
 
   useEffect(() => {
-    const onResize = debounce(() => resizeMindAR(), 200)
-    window.addEventListener('orientationchange', onResize)
-    window.visualViewport?.addEventListener('resize', onResize)
-    return () => {
-      window.removeEventListener('orientationchange', onResize)
-      window.visualViewport?.removeEventListener('resize', onResize)
-    }
+    const onOrientation = debounce(() => resizeMindAR(), 400)
+    window.addEventListener('orientationchange', onOrientation)
+    return () => window.removeEventListener('orientationchange', onOrientation)
   }, [])
 
   useEffect(() => {
