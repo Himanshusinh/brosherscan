@@ -23,8 +23,8 @@ const FILTER_BETA        = 800
 const MISS_TOLERANCE     = 12
 const WARMUP_TOLERANCE   = 8
 
-// Camera zoom: 1 = normal, 0.5 = zoomed out (wider). Lower = see more area.
-const CAMERA_ZOOM        = 0.5
+// Camera zoom: 1 = normal. Lower = wider (zoomed out). 0.35 ≈ ultra-wide.
+const CAMERA_ZOOM        = 0.35
 
 // ─────────────────────────────────────────────
 
@@ -111,10 +111,10 @@ function patchCameraConstraints() {
     if (next.video && typeof next.video === 'object') {
       next.video = {
         ...next.video,
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
+        width: { ideal: 640 },
+        height: { ideal: 480 },
         focusMode: { ideal: 'continuous' },
-        zoom: { ideal: CAMERA_ZOOM },
+        zoom: { ideal: CAMERA_ZOOM, min: CAMERA_ZOOM },
       } as MediaTrackConstraints
     }
     return original(next)
@@ -137,8 +137,8 @@ function ensureFullScreenCamera(scene: any) {
   const camVideo = scene?.systems?.['mindar-image-system']?.video as HTMLVideoElement | undefined
   if (!camVideo) return
 
-  // Override MindAR pixel positioning — always fill full viewport
-  const zoomFactor = CAMERA_ZOOM < 1 ? (100 / CAMERA_ZOOM).toFixed(2) : '100'
+  // Wider min dimensions = zoomed-out full-screen cover (100 / 0.35 ≈ 286%)
+  const zoomFactor = (100 / CAMERA_ZOOM).toFixed(0)
 
   camVideo.style.setProperty('position', 'fixed', 'important')
   camVideo.style.setProperty('top', '50%', 'important')
@@ -151,6 +151,15 @@ function ensureFullScreenCamera(scene: any) {
   camVideo.style.setProperty('object-fit', 'cover', 'important')
   camVideo.style.setProperty('z-index', '0', 'important')
   camVideo.play().catch(() => {})
+}
+
+function widenARCamera(scene: any) {
+  if (CAMERA_ZOOM >= 1) return
+  const cam = scene.querySelector('a-camera')?.getObject3D('camera')
+  if (!cam) return
+  if (scene.__baseFov == null) scene.__baseFov = cam.fov
+  cam.fov = Math.min(105, scene.__baseFov / CAMERA_ZOOM)
+  cam.updateProjectionMatrix()
 }
 
 function ensureCameraVisible(scene: any) {
@@ -168,7 +177,14 @@ function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
 function resizeMindAR() {
   const scene = document.getElementById('ar-scene') as any
   scene?.systems?.['mindar-image-system']?._resize?.()
-  if (scene) ensureFullScreenCamera(scene)
+  if (scene) {
+    if (scene.__baseFov == null) {
+      const cam = scene.querySelector('a-camera')?.getObject3D('camera')
+      if (cam) scene.__baseFov = cam.fov
+    }
+    widenARCamera(scene)
+    ensureFullScreenCamera(scene)
+  }
 }
 
 async function focusCameraAtPoint(
@@ -218,17 +234,16 @@ async function enhanceCameraQuality(scene: any) {
   if (!track) return
 
   try {
-    const caps = track.getCapabilities?.() as MediaTrackCapabilities & { zoom?: { min?: number; max?: number } }
+    const caps = track.getCapabilities?.() as MediaTrackCapabilities & {
+      zoom?: { min?: number; max?: number }
+    }
     const zoomCaps = caps?.zoom
-    const targetZoom = zoomCaps
-      ? Math.max(zoomCaps.min ?? CAMERA_ZOOM, Math.min(zoomCaps.max ?? 1, CAMERA_ZOOM))
-      : CAMERA_ZOOM
+    // Use the widest zoom the device supports (lowest zoom value)
+    const targetZoom = zoomCaps?.min ?? CAMERA_ZOOM
 
     await track.applyConstraints({
       facingMode: { ideal: 'environment' },
-      width: { ideal: 1280 },
-      height: { ideal: 720 },
-      zoom: { ideal: targetZoom },
+      zoom: { ideal: targetZoom, min: targetZoom },
     } as MediaTrackConstraints)
   } catch {
     // Keep default camera settings if device rejects constraints
