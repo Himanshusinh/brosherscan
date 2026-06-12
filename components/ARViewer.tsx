@@ -91,8 +91,8 @@ function patchCameraConstraints() {
     if (next.video && typeof next.video === 'object') {
       next.video = {
         ...next.video,
-        width: { ideal: 1920, min: 1280 },
-        height: { ideal: 1080, min: 720 },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
       }
     }
     return original(next)
@@ -121,13 +121,8 @@ async function enhanceCameraQuality(scene: any) {
   try {
     await track.applyConstraints({
       facingMode: { ideal: 'environment' },
-      width: { ideal: 1920, min: 1280 },
-      height: { ideal: 1080, min: 720 },
-    })
-    await new Promise<void>((resolve) => {
-      if (!video) return resolve()
-      if (video.readyState >= 1) return resolve()
-      video.addEventListener('loadedmetadata', () => resolve(), { once: true })
+      width: { ideal: 1920 },
+      height: { ideal: 1080 },
     })
   } catch {
     // Keep default camera settings if device rejects constraints
@@ -155,7 +150,8 @@ export default function ARViewer() {
         id="ar-scene"
         mindar-image="imageTargetSrc: ${TARGET_MIND}; autoStart: true; uiLoading: no; uiError: no; uiScanning: no;"
         color-space="sRGB"
-        renderer="alpha: true; colorManagement: true; physicallyCorrectLights: true"
+        background="color: transparent"
+        renderer="alpha: true; premultipliedAlpha: false; colorManagement: true; physicallyCorrectLights: true"
         vr-mode-ui="enabled: false"
         device-orientation-permission-ui="enabled: false"
       >
@@ -191,11 +187,20 @@ export default function ARViewer() {
 
     scene?.addEventListener('loaded', () => {
       videoRef.current = document.getElementById('brochure-video') as HTMLVideoElement
-      setStatus('scanning')
     })
 
     scene?.addEventListener('arReady', async () => {
+      setStatus('scanning')
       syncContainerSize(sceneRef.current)
+
+      // Ensure MindAR camera video is visible
+      const system = scene.systems?.['mindar-image-system']
+      const camVideo = system?.video as HTMLVideoElement | undefined
+      if (camVideo) {
+        camVideo.style.zIndex = '0'
+        camVideo.play().catch(() => {})
+      }
+
       await enhanceCameraQuality(scene)
       resizeMindAR()
       setTimeout(() => {
@@ -240,8 +245,9 @@ export default function ARViewer() {
   }, [])
 
   useEffect(() => {
-    const onResize = () => syncContainerSize(sceneRef.current)
-    syncContainerSize(sceneRef.current)
+    const onResize = () => {
+      if (sceneBuilt.current) syncContainerSize(sceneRef.current)
+    }
     window.addEventListener('orientationchange', onResize)
     window.visualViewport?.addEventListener('resize', onResize)
     return () => {

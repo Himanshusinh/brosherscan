@@ -14,8 +14,8 @@ html, body {
 }
 
 /*
-  MindAR sizes the camera video from a-scene's parent (.ar-scene-container).
-  Do NOT override video/canvas dimensions — MindAR handles cover-fit itself.
+  MindAR appends the camera <video> with z-index: -2.
+  Without fixes below, it renders BEHIND the black background.
 */
 .ar-scene-container {
   position: absolute;
@@ -23,7 +23,13 @@ html, body {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: #000;
+  background: transparent;
+}
+
+/* MindAR camera feed — must sit above container background */
+.ar-scene-container > video {
+  position: absolute !important;
+  z-index: 0 !important;
 }
 
 .ar-scene-container a-scene {
@@ -31,6 +37,11 @@ html, body {
   inset: 0 !important;
   width: 100% !important;
   height: 100% !important;
+  z-index: 1 !important;
+}
+
+.ar-scene-container a-scene canvas {
+  background: transparent !important;
 }
 
 /* ── Hide MindAR default UI ── */
