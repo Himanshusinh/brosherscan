@@ -33,6 +33,61 @@ function loadScript(src: string): Promise<void> {
   })
 }
 
+function patchCameraConstraints() {
+  if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) return
+  const media = navigator.mediaDevices
+  if ((media as any).__arPatched) return
+
+  const original = media.getUserMedia.bind(media)
+  media.getUserMedia = (constraints) => {
+    const next = { ...constraints } as MediaStreamConstraints
+    if (next.video && typeof next.video === 'object') {
+      next.video = {
+        ...next.video,
+        width: { ideal: 1920, min: 1280 },
+        height: { ideal: 1080, min: 720 },
+      }
+    }
+    return original(next)
+  }
+  ;(media as any).__arPatched = true
+}
+
+function syncContainerSize(container: HTMLDivElement | null) {
+  if (!container) return
+  container.style.width = `${window.innerWidth}px`
+  container.style.height = `${window.innerHeight}px`
+  resizeMindAR()
+}
+
+function resizeMindAR() {
+  const scene = document.getElementById('ar-scene') as any
+  scene?.systems?.['mindar-image-system']?._resize?.()
+}
+
+async function enhanceCameraQuality(scene: any) {
+  const system = scene?.systems?.['mindar-image-system']
+  const video = system?.video as HTMLVideoElement | undefined
+  const track = (video?.srcObject as MediaStream | undefined)?.getVideoTracks()?.[0]
+  if (!track) return
+
+  try {
+    await track.applyConstraints({
+      facingMode: { ideal: 'environment' },
+      width: { ideal: 1920, min: 1280 },
+      height: { ideal: 1080, min: 720 },
+    })
+    await new Promise<void>((resolve) => {
+      if (!video) return resolve()
+      if (video.readyState >= 1) return resolve()
+      video.addEventListener('loadedmetadata', () => resolve(), { once: true })
+    })
+  } catch {
+    // Keep default camera settings if device rejects constraints
+  }
+  system?._resize?.()
+}
+
 type Status = 'loading' | 'ready' | 'scanning' | 'detected' | 'error'
 
 export default function ARViewer() {
@@ -88,12 +143,16 @@ export default function ARViewer() {
     scene?.addEventListener('loaded', () => {
       videoRef.current = document.getElementById('brochure-video') as HTMLVideoElement
       setStatus('scanning')
-      // MindAR sizes camera from container — force full viewport
-      requestAnimationFrame(() => window.dispatchEvent(new Event('resize')))
     })
 
-    scene?.addEventListener('arReady', () => {
-      window.dispatchEvent(new Event('resize'))
+    scene?.addEventListener('arReady', async () => {
+      syncContainerSize(sceneRef.current)
+      await enhanceCameraQuality(scene)
+      resizeMindAR()
+      setTimeout(() => {
+        syncContainerSize(sceneRef.current)
+        resizeMindAR()
+      }, 300)
     })
 
     scene?.addEventListener('arError', (e: any) => {
@@ -127,7 +186,8 @@ export default function ARViewer() {
   }, [])
 
   useEffect(() => {
-    const onResize = () => window.dispatchEvent(new Event('resize'))
+    const onResize = () => syncContainerSize(sceneRef.current)
+    syncContainerSize(sceneRef.current)
     window.addEventListener('orientationchange', onResize)
     window.visualViewport?.addEventListener('resize', onResize)
     return () => {
@@ -142,6 +202,7 @@ export default function ARViewer() {
 
     async function init() {
       try {
+        patchCameraConstraints()
         await loadScript('/vendor/aframe.min.js')
         await loadScript('/vendor/mindar-image-aframe.prod.js')
 
@@ -183,20 +244,10 @@ export default function ARViewer() {
     }
   }, [buildScene])
 
-  useEffect(() => {
-    const onResize = () => window.dispatchEvent(new Event('resize'))
-    window.addEventListener('orientationchange', onResize)
-    window.visualViewport?.addEventListener('resize', onResize)
-    return () => {
-      window.removeEventListener('orientationchange', onResize)
-      window.visualViewport?.removeEventListener('resize', onResize)
-    }
-  }, [])
-
   return (
-    <div className="fixed inset-0 w-screen h-[100dvh] min-h-[100dvh] bg-black overflow-hidden">
+    <div className="fixed inset-0 bg-black overflow-hidden">
 
-      {/* MindAR parent container — must fill screen for camera sizing */}
+      {/* MindAR uses this parent to size the camera feed */}
       <div ref={sceneRef} className="ar-scene-container" />
 
       {/* ── Loading overlay ── */}
