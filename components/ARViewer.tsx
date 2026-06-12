@@ -111,8 +111,8 @@ export default function ARViewer() {
     let attempts = 0
     const interval = setInterval(() => {
       attempts++
-      const win = window as any
-      if (win.AFRAME && win.MINDAR) {
+      const AFRAME = (window as any).AFRAME
+      if (AFRAME?.components?.['mindar-image-system']) {
         clearInterval(interval)
         buildScene()
       }

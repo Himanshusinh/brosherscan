@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import Script from 'next/script'
 import './globals.css'
 
 export const metadata: Metadata = {
@@ -15,10 +16,14 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
-        {/* MindAR + A-Frame must load before the page renders */}
-        <script
+        {/* A-Frame must load before MindAR (MindAR extends A-Frame) */}
+        <Script
+          src="https://aframe.io/releases/1.3.0/aframe.min.js"
+          strategy="beforeInteractive"
+        />
+        <Script
           src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"
-          defer={false}
+          strategy="beforeInteractive"
         />
       </head>
       <body className="bg-black overflow-hidden">
