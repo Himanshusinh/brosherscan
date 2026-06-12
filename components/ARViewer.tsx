@@ -19,6 +19,20 @@ const VIDEO_HEIGHT = 0.5625  // AR plane height — 16:9 ratio (1 × 9/16)
 
 // ─────────────────────────────────────────────
 
+function loadScript(src: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) {
+      resolve()
+      return
+    }
+    const script = document.createElement('script')
+    script.src = src
+    script.onload = () => resolve()
+    script.onerror = () => reject(new Error(`Failed to load ${src}`))
+    document.head.appendChild(script)
+  })
+}
+
 type Status = 'loading' | 'ready' | 'scanning' | 'detected' | 'error'
 
 export default function ARViewer() {
@@ -107,23 +121,41 @@ export default function ARViewer() {
   }, [])
 
   useEffect(() => {
-    // Wait for MindAR + AFRAME to be available on window
-    let attempts = 0
-    const interval = setInterval(() => {
-      attempts++
-      const AFRAME = (window as any).AFRAME
-      if (AFRAME?.components?.['mindar-image-system']) {
-        clearInterval(interval)
-        buildScene()
-      }
-      if (attempts > 60) {
-        clearInterval(interval)
-        setStatus('error')
-        setErrorMsg('AR library failed to load. Please refresh.')
-      }
-    }, 200)
+    let cancelled = false
+    let interval: ReturnType<typeof setInterval> | undefined
 
-    return () => clearInterval(interval)
+    async function init() {
+      try {
+        await loadScript('/vendor/aframe.min.js')
+        await loadScript('/vendor/mindar-image-aframe.prod.js')
+
+        let attempts = 0
+        interval = setInterval(() => {
+          if (cancelled) return
+          attempts++
+          const AFRAME = (window as any).AFRAME
+          if (AFRAME?.components?.['mindar-image-system']) {
+            clearInterval(interval)
+            buildScene()
+          } else if (attempts > 60) {
+            clearInterval(interval)
+            setStatus('error')
+            setErrorMsg('AR library failed to load. Please refresh.')
+          }
+        }, 200)
+      } catch {
+        if (!cancelled) {
+          setStatus('error')
+          setErrorMsg('AR library failed to load. Please refresh.')
+        }
+      }
+    }
+
+    init()
+    return () => {
+      cancelled = true
+      if (interval) clearInterval(interval)
+    }
   }, [buildScene])
 
   return (
