@@ -6,16 +6,16 @@ import { useEffect, useRef, useState, useCallback } from 'react'
    CONFIG — edit these to change your brochure
    ─────────────────────────────────────────────
    1. Put your compiled .mind file in /public/targets/target.mind
-   2. Put your video in /public/videos/brochure-video.mp4
+   2. Put your video in /public/videos/
    3. Adjust VIDEO_ASPECT if your video isn't 16:9
       e.g. 1:1 square → width=1, height=1
            4:3        → width=1, height=0.75
            9:16       → width=1, height=1.77
 */
 const TARGET_MIND  = '/targets/target.mind'   // compiled MindAR image target
-const VIDEO_SRC    = '/videos/brochure-video.mp4'
+const VIDEO_SRC    = '/videos/0_Abstract_Blue_1080x1080.mp4'
 const VIDEO_WIDTH  = 1        // AR plane width  (in A-Frame units)
-const VIDEO_HEIGHT = 0.5625  // AR plane height — 16:9 ratio (1 × 9/16)
+const VIDEO_HEIGHT = 1          // AR plane height — 1:1 square (1080×1080)
 
 // MindAR One Euro filter — lower minCF / beta = less shake
 const FILTER_MIN_CF      = 0.0000001
