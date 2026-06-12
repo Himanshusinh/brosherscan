@@ -24,9 +24,22 @@ html, body {
   background: transparent;
 }
 
-/* Camera sizing is handled in JS (applyCameraDisplayZoom) */
-.ar-scene-container > video {
+/* Main camera + blurred full-screen backdrop (sizing in JS) */
+.ar-scene-container > video,
+.ar-camera-backdrop {
+  position: fixed !important;
+  object-fit: cover !important;
+}
+
+.ar-camera-backdrop {
   z-index: 0 !important;
+  filter: blur(28px) brightness(0.55) saturate(1.1);
+  transform: scale(1.04);
+  pointer-events: none;
+}
+
+.ar-scene-container > video:not(.ar-camera-backdrop) {
+  z-index: 1 !important;
 }
 
 .ar-scene-container a-scene {
