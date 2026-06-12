@@ -17,6 +17,12 @@ const VIDEO_SRC    = '/videos/brochure-video.mp4'
 const VIDEO_WIDTH  = 1        // AR plane width  (in A-Frame units)
 const VIDEO_HEIGHT = 0.5625  // AR plane height — 16:9 ratio (1 × 9/16)
 
+// MindAR smoothing — lower minCF = less jitter, higher tolerance = more stable lock
+const FILTER_MIN_CF      = 0.0001
+const FILTER_BETA        = 800
+const MISS_TOLERANCE     = 12
+const WARMUP_TOLERANCE   = 8
+
 // ─────────────────────────────────────────────
 
 const AFRAME_SRC = '/vendor/aframe.min.js'
@@ -104,7 +110,8 @@ function patchCameraConstraints() {
         ...next.video,
         width: { ideal: 1920 },
         height: { ideal: 1080 },
-      }
+        focusMode: { ideal: 'continuous' },
+      } as MediaTrackConstraints
     }
     return original(next)
   }
@@ -135,23 +142,75 @@ function ensureCameraVisible(scene: any) {
   camVideo.play().catch(() => {})
 }
 
+function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
+  let timer: ReturnType<typeof setTimeout>
+  return ((...args: any[]) => {
+    clearTimeout(timer)
+    timer = setTimeout(() => fn(...args), ms)
+  }) as T
+}
+
+let lastContainerW = 0
+let lastContainerH = 0
+
 function syncContainerSize(container: HTMLDivElement | null) {
   if (!container) return
   const vv = window.visualViewport
   const w = vv?.width ?? window.innerWidth
   const h = vv?.height ?? window.innerHeight
+  if (w === lastContainerW && h === lastContainerH) return
+  lastContainerW = w
+  lastContainerH = h
   container.style.width = `${w}px`
   container.style.height = `${h}px`
   container.style.left = `${vv?.offsetLeft ?? 0}px`
   container.style.top = `${vv?.offsetTop ?? 0}px`
-  resizeMindAR(container)
+  resizeMindAR()
 }
 
-function resizeMindAR(container?: HTMLDivElement | null) {
+function resizeMindAR() {
   const scene = document.getElementById('ar-scene') as any
+  scene?.systems?.['mindar-image-system']?._resize?.()
+}
+
+async function focusCameraAtPoint(
+  scene: any,
+  clientX: number,
+  clientY: number,
+  container: HTMLElement,
+) {
   const system = scene?.systems?.['mindar-image-system']
-  system?._resize?.()
-  if (scene) ensureCameraVisible(scene)
+  const video = system?.video as HTMLVideoElement | undefined
+  const track = (video?.srcObject as MediaStream | undefined)?.getVideoTracks()?.[0]
+  if (!track?.applyConstraints) return
+
+  const rect = container.getBoundingClientRect()
+  const x = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
+  const y = Math.min(1, Math.max(0, (clientY - rect.top) / rect.height))
+  const caps = track.getCapabilities?.() ?? {} as MediaTrackCapabilities
+  const focusModes = (caps as MediaTrackCapabilities & { focusMode?: string[] }).focusMode ?? []
+
+  const attempts: MediaTrackConstraints[] = []
+
+  if ((caps as any).pointsOfInterest) {
+    attempts.push({ advanced: [{ pointsOfInterest: [{ x, y }] }] } as unknown as MediaTrackConstraints)
+  }
+  attempts.push({ pointsOfInterest: [{ x, y }] } as unknown as MediaTrackConstraints)
+
+  if (focusModes.includes('single-shot')) {
+    attempts.push({ advanced: [{ focusMode: 'single-shot' }] } as unknown as MediaTrackConstraints)
+  } else if (focusModes.includes('manual')) {
+    attempts.push({ advanced: [{ focusMode: 'manual' }] } as unknown as MediaTrackConstraints)
+  }
+
+  for (const constraints of attempts) {
+    try {
+      await track.applyConstraints(constraints)
+      break
+    } catch {
+      // try next method
+    }
+  }
 }
 
 async function enhanceCameraQuality(scene: any) {
@@ -173,6 +232,7 @@ async function enhanceCameraQuality(scene: any) {
 }
 
 type Status = 'loading' | 'ready' | 'scanning' | 'detected' | 'error'
+type FocusPoint = { x: number; y: number }
 
 export default function ARViewer() {
   const sceneRef    = useRef<HTMLDivElement>(null)
@@ -181,6 +241,21 @@ export default function ARViewer() {
   const [status, setStatus]   = useState<Status>('loading')
   const [errorMsg, setErrorMsg] = useState('')
   const [detected, setDetected] = useState(false)
+  const [focusPoint, setFocusPoint] = useState<FocusPoint | null>(null)
+
+  const handleTapToFocus = useCallback((e: React.PointerEvent) => {
+    if (status !== 'scanning' && status !== 'detected') return
+    const container = sceneRef.current
+    const scene = document.getElementById('ar-scene')
+    if (!container || !scene) return
+
+    const x = (e.clientX / window.innerWidth) * 100
+    const y = (e.clientY / window.innerHeight) * 100
+    setFocusPoint({ x, y })
+    setTimeout(() => setFocusPoint(null), 700)
+
+    focusCameraAtPoint(scene, e.clientX, e.clientY, container)
+  }, [status])
 
   // ── inject the A-Frame / MindAR scene into the DOM ──────────────
   const buildScene = useCallback(() => {
@@ -190,7 +265,7 @@ export default function ARViewer() {
     sceneRef.current.innerHTML = `
       <a-scene
         id="ar-scene"
-        mindar-image="imageTargetSrc: ${TARGET_MIND}; autoStart: true; uiLoading: no; uiError: no; uiScanning: no;"
+        mindar-image="imageTargetSrc: ${TARGET_MIND}; autoStart: true; uiLoading: no; uiError: no; uiScanning: no; filterMinCF: ${FILTER_MIN_CF}; filterBeta: ${FILTER_BETA}; missTolerance: ${MISS_TOLERANCE}; warmupTolerance: ${WARMUP_TOLERANCE};"
         color-space="sRGB"
         renderer="alpha: true; antialias: false; precision: mediump"
         vr-mode-ui="enabled: false"
@@ -282,14 +357,12 @@ export default function ARViewer() {
   }, [])
 
   useEffect(() => {
-    const onResize = () => syncContainerSize(sceneRef.current)
+    const onResize = debounce(() => syncContainerSize(sceneRef.current), 200)
     window.addEventListener('orientationchange', onResize)
     window.visualViewport?.addEventListener('resize', onResize)
-    window.visualViewport?.addEventListener('scroll', onResize)
     return () => {
       window.removeEventListener('orientationchange', onResize)
       window.visualViewport?.removeEventListener('resize', onResize)
-      window.visualViewport?.removeEventListener('scroll', onResize)
     }
   }, [])
 
@@ -348,6 +421,23 @@ export default function ARViewer() {
             Use Chrome on Android or Safari on iPhone
           </p>
         </div>
+      )}
+
+      {/* Tap anywhere to focus camera */}
+      {(status === 'scanning' || status === 'detected') && (
+        <div
+          className="fixed inset-0 z-10"
+          onPointerDown={handleTapToFocus}
+          aria-label="Tap to focus camera"
+        />
+      )}
+
+      {/* Focus ring feedback */}
+      {focusPoint && (
+        <div
+          className="fixed z-30 pointer-events-none focus-ring"
+          style={{ left: `${focusPoint.x}%`, top: `${focusPoint.y}%` }}
+        />
       )}
 
       {/* Scanning status only */}

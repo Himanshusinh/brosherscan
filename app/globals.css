@@ -95,3 +95,20 @@ html, body {
 .spinner {
   animation: spin 0.9s linear infinite;
 }
+
+/* Tap-to-focus indicator */
+@keyframes focus-pulse {
+  0% { transform: translate(-50%, -50%) scale(1.2); opacity: 0.9; }
+  100% { transform: translate(-50%, -50%) scale(0.6); opacity: 0; }
+}
+
+.focus-ring {
+  width: 64px;
+  height: 64px;
+  margin-left: 0;
+  margin-top: 0;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  border-radius: 50%;
+  box-shadow: 0 0 12px rgba(99, 102, 241, 0.6);
+  animation: focus-pulse 0.7s ease-out forwards;
+}
