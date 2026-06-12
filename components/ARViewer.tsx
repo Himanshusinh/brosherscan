@@ -133,36 +133,28 @@ function makeSceneTransparent(scene: any) {
   if (bg?.mesh) bg.mesh.visible = false
 }
 
-function applyCameraZoom(scene: any) {
-  const system = scene?.systems?.['mindar-image-system']
-  const camVideo = system?.video as HTMLVideoElement | undefined
+function ensureFullScreenCamera(scene: any) {
+  const camVideo = scene?.systems?.['mindar-image-system']?.video as HTMLVideoElement | undefined
   if (!camVideo) return
 
-  // Full-screen cover, expanded to simulate zoom-out (see more of the scene)
-  const expand = `${(100 / CAMERA_ZOOM).toFixed(2)}%`
-  const offset = `${(-((100 / CAMERA_ZOOM - 100) / 2)).toFixed(2)}%`
+  // Override MindAR pixel positioning — always fill full viewport
+  const zoomFactor = CAMERA_ZOOM < 1 ? (100 / CAMERA_ZOOM).toFixed(2) : '100'
 
-  camVideo.style.setProperty('position', 'absolute', 'important')
-  camVideo.style.setProperty('width', expand, 'important')
-  camVideo.style.setProperty('height', expand, 'important')
-  camVideo.style.setProperty('left', offset, 'important')
-  camVideo.style.setProperty('top', offset, 'important')
+  camVideo.style.setProperty('position', 'fixed', 'important')
+  camVideo.style.setProperty('top', '50%', 'important')
+  camVideo.style.setProperty('left', '50%', 'important')
+  camVideo.style.setProperty('min-width', `${zoomFactor}vw`, 'important')
+  camVideo.style.setProperty('min-height', `${zoomFactor}dvh`, 'important')
+  camVideo.style.setProperty('width', 'auto', 'important')
+  camVideo.style.setProperty('height', 'auto', 'important')
+  camVideo.style.setProperty('transform', 'translate(-50%, -50%)', 'important')
   camVideo.style.setProperty('object-fit', 'cover', 'important')
   camVideo.style.setProperty('z-index', '0', 'important')
   camVideo.play().catch(() => {})
-
-  // Widen AR camera FOV so overlay stays aligned with zoomed-out feed
-  if (CAMERA_ZOOM < 1) {
-    const cam = scene.querySelector('a-camera')?.getObject3D('camera')
-    if (cam?.fov) {
-      cam.fov = Math.min(110, cam.fov / CAMERA_ZOOM)
-      cam.updateProjectionMatrix()
-    }
-  }
 }
 
 function ensureCameraVisible(scene: any) {
-  applyCameraZoom(scene)
+  ensureFullScreenCamera(scene)
 }
 
 function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
@@ -173,28 +165,10 @@ function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
   }) as T
 }
 
-let lastContainerW = 0
-let lastContainerH = 0
-
-function syncContainerSize(container: HTMLDivElement | null) {
-  if (!container) return
-  const vv = window.visualViewport
-  const w = vv?.width ?? window.innerWidth
-  const h = vv?.height ?? window.innerHeight
-  if (w === lastContainerW && h === lastContainerH) return
-  lastContainerW = w
-  lastContainerH = h
-  container.style.width = `${w}px`
-  container.style.height = `${h}px`
-  container.style.left = `${vv?.offsetLeft ?? 0}px`
-  container.style.top = `${vv?.offsetTop ?? 0}px`
-  resizeMindAR()
-}
-
 function resizeMindAR() {
   const scene = document.getElementById('ar-scene') as any
   scene?.systems?.['mindar-image-system']?._resize?.()
-  if (scene) applyCameraZoom(scene)
+  if (scene) ensureFullScreenCamera(scene)
 }
 
 async function focusCameraAtPoint(
@@ -260,7 +234,7 @@ async function enhanceCameraQuality(scene: any) {
     // Keep default camera settings if device rejects constraints
   }
   system?._resize?.()
-  applyCameraZoom(scene)
+  ensureFullScreenCamera(scene)
 }
 
 type Status = 'loading' | 'ready' | 'scanning' | 'detected' | 'error'
@@ -343,7 +317,7 @@ export default function ARViewer() {
 
     scene?.addEventListener('arReady', () => {
       setStatus('scanning')
-      syncContainerSize(sceneRef.current)
+      resizeMindAR()
       makeSceneTransparent(scene)
       ensureCameraVisible(scene)
       resizeMindAR()
@@ -389,7 +363,7 @@ export default function ARViewer() {
   }, [])
 
   useEffect(() => {
-    const onResize = debounce(() => syncContainerSize(sceneRef.current), 200)
+    const onResize = debounce(() => resizeMindAR(), 200)
     window.addEventListener('orientationchange', onResize)
     window.visualViewport?.addEventListener('resize', onResize)
     return () => {
@@ -422,7 +396,7 @@ export default function ARViewer() {
   }, [buildScene])
 
   return (
-    <div className="fixed inset-0 w-full h-[100dvh] bg-black overflow-hidden">
+    <div className="fixed inset-0 w-screen h-[100dvh] bg-black overflow-hidden touch-none">
 
       <div ref={sceneRef} className="ar-scene-container" />
 
