@@ -17,82 +17,106 @@ const VIDEO_SRC    = '/videos/brochure-video.mp4'
 const VIDEO_WIDTH  = 1        // AR plane width  (in A-Frame units)
 const VIDEO_HEIGHT = 0.5625  // AR plane height — 16:9 ratio (1 × 9/16)
 
-// MindAR One Euro filter — lower minCF / beta = less shake (more lag when moving)
-const FILTER_MIN_CF      = 0.000001
-const FILTER_BETA        = 80
-const MISS_TOLERANCE     = 30
-const WARMUP_TOLERANCE   = 22
+// MindAR One Euro filter — lower minCF / beta = less shake
+const FILTER_MIN_CF      = 0.0000001
+const FILTER_BETA        = 25
+const MISS_TOLERANCE     = 35
+const WARMUP_TOLERANCE   = 25
 
-// Second-pass stabilizer applied after MindAR updates each frame
-const STABILIZER_POS_FACTOR  = 0.035
-const STABILIZER_ROT_FACTOR  = 0.04
-const STABILIZER_POS_DEADZONE = 0.0004
-const STABILIZER_ROT_DEADZONE = 0.0012
+// Stabilizer — freezes overlay when still; unlocks only on deliberate movement
+const STABILIZER_POS_FACTOR   = 0.012
+const STABILIZER_ROT_FACTOR   = 0.015
+const STABILIZER_POS_DEADZONE = 0.0015
+const STABILIZER_ROT_DEADZONE = 0.0035
+const STABILIZER_LOCK_FRAMES  = 8
+const STABILIZER_UNLOCK_POS   = 0.025
+const STABILIZER_UNLOCK_ROT   = 0.06
 
-/** Patch MindAR target updates with position/quaternion smoothing (matrix lerp causes shake). */
-function registerTrackingStabilizer() {
-  const AFRAME = (window as any).AFRAME
-  const comp = AFRAME?.components?.['mindar-image-target']
-  if (!comp?.updateWorldMatrix || comp.__stabilized) return
-  comp.__stabilized = true
+function wrapAnchorStabilizer(componentInstance: any) {
+  if (componentInstance.__stabilizerWrapped) return
+  componentInstance.__stabilizerWrapped = true
 
-  const THREE = AFRAME.THREE
-  type StabilizerState = {
-    pos: InstanceType<typeof THREE.Vector3>
-    quat: InstanceType<typeof THREE.Quaternion>
-    scale: InstanceType<typeof THREE.Vector3>
-    ready: boolean
+  const THREE = (window as any).AFRAME.THREE
+  const state = {
+    pos: new THREE.Vector3(),
+    quat: new THREE.Quaternion(),
+    scale: new THREE.Vector3(),
+    ready: false,
+    locked: false,
+    stableFrames: 0,
   }
-  const states = new WeakMap<object, StabilizerState>()
-  const scratch = {
+  const target = {
     pos: new THREE.Vector3(),
     quat: new THREE.Quaternion(),
     scale: new THREE.Vector3(),
   }
 
-  const original = comp.updateWorldMatrix
-  comp.updateWorldMatrix = function (this: { el: any }, matrix: number[] | null) {
-    original.call(this, matrix)
+  const original = componentInstance.updateWorldMatrix.bind(componentInstance)
+  componentInstance.updateWorldMatrix = (matrix: number[] | null) => {
+    original(matrix)
 
-    const el = this.el
+    const el = componentInstance.el
     if (!matrix || !el?.object3D?.visible) {
-      if (el) states.delete(el)
+      state.ready = false
+      state.locked = false
+      state.stableFrames = 0
       return
     }
 
-    el.object3D.matrix.decompose(scratch.pos, scratch.quat, scratch.scale)
+    el.object3D.matrix.decompose(target.pos, target.quat, target.scale)
 
-    let st = states.get(el)
-    if (!st) {
-      st = {
-        pos: scratch.pos.clone(),
-        quat: scratch.quat.clone(),
-        scale: scratch.scale.clone(),
-        ready: false,
-      }
-      states.set(el, st)
+    if (!state.ready) {
+      state.pos.copy(target.pos)
+      state.quat.copy(target.quat)
+      state.scale.copy(target.scale)
+      state.ready = true
+      el.object3D.matrix.compose(state.pos, state.quat, state.scale)
+      return
     }
 
-    if (!st.ready) {
-      st.pos.copy(scratch.pos)
-      st.quat.copy(scratch.quat)
-      st.scale.copy(scratch.scale)
-      st.ready = true
+    const posDelta = state.pos.distanceTo(target.pos)
+    const rotDelta = state.quat.angleTo(target.quat)
+
+    if (state.locked) {
+      if (posDelta > STABILIZER_UNLOCK_POS || rotDelta > STABILIZER_UNLOCK_ROT) {
+        state.locked = false
+        state.stableFrames = 0
+        state.pos.lerp(target.pos, STABILIZER_POS_FACTOR)
+        state.quat.slerp(target.quat, STABILIZER_ROT_FACTOR)
+        state.scale.lerp(target.scale, STABILIZER_POS_FACTOR)
+      }
+    } else if (posDelta < STABILIZER_POS_DEADZONE && rotDelta < STABILIZER_ROT_DEADZONE) {
+      state.stableFrames += 1
+      if (state.stableFrames >= STABILIZER_LOCK_FRAMES) state.locked = true
     } else {
-      const posDelta = st.pos.distanceTo(scratch.pos)
-      const rotDelta = st.quat.angleTo(scratch.quat)
-      const posFactor = posDelta < STABILIZER_POS_DEADZONE ? 0 : STABILIZER_POS_FACTOR
-      const rotFactor = rotDelta < STABILIZER_ROT_DEADZONE ? 0 : STABILIZER_ROT_FACTOR
-
-      if (posFactor) {
-        st.pos.lerp(scratch.pos, posFactor)
-        st.scale.lerp(scratch.scale, posFactor)
-      }
-      if (rotFactor) st.quat.slerp(scratch.quat, rotFactor)
+      state.stableFrames = 0
+      state.pos.lerp(target.pos, STABILIZER_POS_FACTOR)
+      state.quat.slerp(target.quat, STABILIZER_ROT_FACTOR)
+      state.scale.lerp(target.scale, STABILIZER_POS_FACTOR)
     }
 
-    el.object3D.matrix.compose(st.pos, st.quat, st.scale)
+    el.object3D.matrix.compose(state.pos, state.quat, state.scale)
   }
+}
+
+/** Wrap every MindAR anchor so tracking updates are heavily damped / locked when still. */
+function registerTrackingStabilizer() {
+  const AFRAME = (window as any).AFRAME
+  const comp = AFRAME?.components?.['mindar-image-target']
+  if (!comp || comp.__stabilizerInitPatched) return
+  comp.__stabilizerInitPatched = true
+
+  const origInit = comp.init
+  comp.init = function (this: unknown) {
+    origInit.call(this)
+    wrapAnchorStabilizer(this)
+  }
+}
+
+function attachAnchorStabilizers(scene: any) {
+  const anchors = scene?.systems?.['mindar-image-system']?.anchorEntities
+  if (!anchors) return
+  for (const { el } of anchors) wrapAnchorStabilizer(el)
 }
 
 function removeCameraBackdrop(parent: HTMLElement | null) {
@@ -454,6 +478,7 @@ export default function ARViewer() {
 
     scene?.addEventListener('arReady', () => {
       setStatus('scanning')
+      attachAnchorStabilizers(scene)
       patchMindARResize(scene)
       resizeMindAR()
       makeSceneTransparent(scene)
